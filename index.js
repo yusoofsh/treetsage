@@ -3,6 +3,24 @@ import { file, serve } from "bun"
 const API_KEY = process.env.GOOGLE_MAPS_API_KEY
 if (!API_KEY) throw new Error("Missing GOOGLE_MAPS_API_KEY")
 
+// Common CORS headers
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization",
+}
+
+// Helper to wrap responses with CORS
+function withCORS(body, init) {
+  return new Response(body, {
+    ...init,
+    headers: {
+      ...(init.headers || {}),
+      ...corsHeaders,
+    },
+  })
+}
+
 const geocode = async (location) => {
   if (!location || /^-?\d+\.?\d*,-?\d+\.?\d*$/.test(location)) return location
 
@@ -17,7 +35,6 @@ const geocode = async (location) => {
   }
 
   const { lat, lng } = data.results[0].geometry.location
-
   return `${lat},${lng}`
 }
 
@@ -37,98 +54,115 @@ const formatPlace = (place) => ({
 
 serve({
   port: 3000,
-  routes: {
-    "/health": {
-      GET: () => new Response("OK"),
-    },
 
-    "/openapi.json": {
-      GET: () => new Response(file("./openapi.json")),
-    },
+  fetch: async (req) => {
+    const url = new URL(req.url)
 
-    "/api/places/search": {
-      GET: async (req) => {
-        const { searchParams } = new URL(req.url)
-        const query = searchParams.get("query")
-        const radius = searchParams.get("radius") || "50000"
-        const type = searchParams.get("type")
-        let location = searchParams.get("location")
+    // Handle OPTIONS preflight
+    if (req.method === "OPTIONS") {
+      return withCORS(null, { status: 204 })
+    }
 
-        if (!query) {
-          return Response.json(
-            { error: "Query parameter is required" },
-            { status: 400 }
-          )
-        }
+    // Health check
+    if (url.pathname === "/health") {
+      return withCORS("OK")
+    }
 
-        const params = new URLSearchParams({ query, key: API_KEY })
+    // Serve OpenAPI JSON
+    if (url.pathname === "/openapi.json") {
+      return withCORS(await file("./openapi.json").text(), {
+        headers: { "Content-Type": "application/json" },
+      })
+    }
 
-        if (location) {
-          location = await geocode(location)
-          if (typeof location === "string") {
-            params.append("location", location)
-            params.append("radius", radius)
-          }
-        }
+    // Search places
+    if (url.pathname === "/api/places/search" && req.method === "GET") {
+      const { searchParams } = url
+      const query = searchParams.get("query")
+      const radius = searchParams.get("radius") || "50000"
+      const type = searchParams.get("type")
+      let location = searchParams.get("location")
 
-        if (type) params.append("type", type)
-
-        const response = await fetch(
-          `https://maps.googleapis.com/maps/api/place/textsearch/json?${params}`
+      if (!query) {
+        return withCORS(
+          JSON.stringify({ error: "Query parameter is required" }),
+          { status: 400 }
         )
-        const data = await response.json()
+      }
 
-        if (data.status !== "OK" && data.status !== "ZERO_RESULTS") {
-          return Response.json(
-            {
-              error: "Google Places API error",
-              status: data.status,
-              message: data.error_message || "Unknown error",
-            },
-            { status: 500 }
-          )
+      const params = new URLSearchParams({ query, key: API_KEY })
+
+      if (location) {
+        location = await geocode(location)
+        if (typeof location === "string") {
+          params.append("location", location)
+          params.append("radius", radius)
         }
+      }
 
-        return Response.json({
+      if (type) params.append("type", type)
+
+      const response = await fetch(
+        `https://maps.googleapis.com/maps/api/place/textsearch/json?${params}`
+      )
+      const data = await response.json()
+
+      if (data.status !== "OK" && data.status !== "ZERO_RESULTS") {
+        return withCORS(
+          JSON.stringify({
+            error: "Google Places API error",
+            status: data.status,
+            message: data.error_message || "Unknown error",
+          }),
+          { status: 500 }
+        )
+      }
+
+      return withCORS(
+        JSON.stringify({
           results: data.results.map(formatPlace),
           status: data.status,
-        })
-      },
-    },
+        }),
+        { headers: { "Content-Type": "application/json" } }
+      )
+    }
 
-    "/api/places/details": {
-      GET: async (req) => {
-        const placeId = new URL(req.url).searchParams.get("place_id")
+    // Place details
+    if (url.pathname === "/api/places/details" && req.method === "GET") {
+      const placeId = url.searchParams.get("place_id")
 
-        if (!placeId) {
-          return Response.json(
-            { error: "place_id parameter is required" },
-            { status: 400 }
-          )
-        }
+      if (!placeId) {
+        return withCORS(
+          JSON.stringify({ error: "place_id parameter is required" }),
+          { status: 400 }
+        )
+      }
 
-        const url = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${placeId}&key=${API_KEY}&fields=name,formatted_address,formatted_phone_number,website,rating,reviews,opening_hours,photos,geometry`
-        const response = await fetch(url)
-        const data = await response.json()
+      const apiUrl = `https://maps.googleapis.com/maps/api/place/details/json?place_id=${placeId}&key=${API_KEY}&fields=name,formatted_address,formatted_phone_number,website,rating,reviews,opening_hours,photos,geometry`
+      const response = await fetch(apiUrl)
+      const data = await response.json()
 
-        if (data.status !== "OK") {
-          return Response.json(
-            {
-              error: "Google Places API error",
-              status: data.status,
-            },
-            { status: 500 }
-          )
-        }
+      if (data.status !== "OK") {
+        return withCORS(
+          JSON.stringify({
+            error: "Google Places API error",
+            status: data.status,
+          }),
+          { status: 500 }
+        )
+      }
 
-        return Response.json(data.result)
-      },
-    },
+      return withCORS(JSON.stringify(data.result), {
+        headers: { "Content-Type": "application/json" },
+      })
+    }
+
+    return withCORS("Not Found", { status: 404 })
   },
 
   error(error) {
     console.error(error)
-    return new Response("Internal Server Error", { status: 500 })
+    return withCORS("Internal Server Error", { status: 500 })
   },
 })
 
