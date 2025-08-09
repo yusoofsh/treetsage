@@ -1,0 +1,12 @@
+{
+  "name": "treetsage",
+  "module": "index.js",
+  "type": "module",
+  "private": true,
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "scripts": {
+    "dev": "bun run --watch index.js"
+  }
+}
