@@ -1,4 +1,4 @@
-import { serve } from "bun"
+import { file, serve } from "bun"
 
 const API_KEY = process.env.GOOGLE_MAPS_API_KEY
 if (!API_KEY) throw new Error("Missing GOOGLE_MAPS_API_KEY")
@@ -17,6 +17,7 @@ const geocode = async (location) => {
   }
 
   const { lat, lng } = data.results[0].geometry.location
+
   return `${lat},${lng}`
 }
 
@@ -39,6 +40,10 @@ serve({
   routes: {
     "/health": {
       GET: () => new Response("OK"),
+    },
+
+    "/openapi.json": {
+      GET: () => new Response(file("./openapi.json")),
     },
 
     "/api/places/search": {
