@@ -3,10 +3,16 @@
   "module": "index.js",
   "type": "module",
   "private": true,
-  "devDependencies": {
-    "@types/bun": "latest"
-  },
   "scripts": {
-    "dev": "bun run --watch index.js"
+    "dev": "bun --hot server.js",
+    "start": "bun server.js",
+    "test": "bun server.test.js"
+  },
+  "dependencies": {
+    "hono": "^4.9.0"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "@types/node": "latest"
   }
 }
