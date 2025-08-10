@@ -1,4 +1,4 @@
-// server.js - Bun backend for Maps LLM
+// server.js - Fixed Bun backend for Maps LLM
 import { Hono } from "hono"
 import { bearerAuth } from "hono/bearer-auth"
 import { cors } from "hono/cors"
@@ -14,6 +14,11 @@ const config = {
 
 if (!config.googleMapsApiKey) {
   console.error("❌ GOOGLE_MAPS_API_KEY environment variable is required")
+  process.exit(1)
+}
+
+if (!config.apiSecret) {
+  console.error("❌ API_SECRET environment variable is required")
   process.exit(1)
 }
 
@@ -183,43 +188,61 @@ async function getDirections(origin, destination, mode = "driving") {
   }
 }
 
-function generateMapUrl(places, centerLat, centerLng) {
-  if (places && places.length > 0) {
-    const firstPlace = places[0]
-    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
-      firstPlace.name
-    )}&query_place_id=${firstPlace.place_id}`
+function generateEmbedHtml(places) {
+  if (!places || places.length === 0) {
+    return ""
   }
 
-  return `https://www.google.com/maps/search/?api=1&query=${centerLat},${centerLng}`
+  // Create individual iframes for each place (limit to top 5 for performance)
+  const placesToShow = places.slice(0, 5)
+
+  return placesToShow.map((place) => {
+    const embedUrl =
+      `https://www.google.com/maps/embed/v1/place?` +
+      `key=${config.googleMapsApiKey}` +
+      `&q=place_id:${place.place_id}` +
+      `&zoom=15`
+
+    const directionsUrl = `https://www.google.com/maps/dir/?api=1&destination_place_id=${
+      place.place_id
+    }&destination=${encodeURIComponent(place.name)}`
+
+    return {
+      place_id: place.place_id,
+      name: place.name,
+      embed_html: `<div style="margin-bottom:16px;">
+        <iframe
+          width="100%"
+          height="300"
+          frameborder="0"
+          style="border:0;border-radius:8px;"
+          src="${embedUrl}"
+          allowfullscreen
+          loading="lazy">
+        </iframe>
+      </div>`,
+      directions_url: directionsUrl,
+    }
+  })
 }
 
-function generateEmbedHtml(places, centerLat, centerLng) {
-  const query = places && places.length > 0 ? places[0].name : "location"
+function generateMapUrl(places) {
+  if (!places || places.length === 0) {
+    return ""
+  }
 
-  const embedUrl =
-    `https://www.google.com/maps/embed/v1/search?` +
-    `key=${config.googleMapsApiKey}&` +
-    `q=${encodeURIComponent(query)}&` +
-    `center=${centerLat},${centerLng}&` +
-    `zoom=13`
-
-  return `<iframe
-    width="600"
-    height="450"
-    style="border:0"
-    loading="lazy"
-    allowfullscreen
-    referrerpolicy="no-referrer-when-downgrade"
-    src="${embedUrl}">
-  </iframe>`
+  // Create a search URL that shows multiple results
+  const firstPlace = places[0]
+  return `https://www.google.com/maps/search/${encodeURIComponent(
+    firstPlace.name
+  )}/@${firstPlace.location.lat},${firstPlace.location.lng},13z`
 }
 
 // API Routes
 app.post("/search-places", async (c) => {
   try {
     const body = await c.req.json()
-    const { query, location, radius = 2000, place_type: placeType } = body
+    const { query, location, radius = 2000, type } = body
 
     if (!query) {
       return c.json({ error: "Query parameter is required" }, 400)
@@ -229,7 +252,7 @@ app.post("/search-places", async (c) => {
       `🔍 Searching for: "${query}" ${location ? `in ${location}` : ""}`
     )
 
-    const places = await searchPlaces(query, location, radius, placeType)
+    const places = await searchPlaces(query, location, radius, type)
 
     if (places.length === 0) {
       return c.json(
@@ -266,14 +289,16 @@ app.post("/search-places", async (c) => {
     const centerLat = totalLat / processedPlaces.length
     const centerLng = totalLng / processedPlaces.length
 
-    // Generate URLs
-    const mapUrl = generateMapUrl(processedPlaces, centerLat, centerLng)
-    const embedHtml = generateEmbedHtml(processedPlaces, centerLat, centerLng)
+    // Generate individual embeds and URLs for each place
+    const placeEmbeds = generateEmbedHtml(processedPlaces)
+    const mapUrl = generateMapUrl(processedPlaces)
 
     return c.json({
       places: processedPlaces,
+      place_embeds: placeEmbeds, // Array of individual embed data
       map_url: mapUrl,
-      embed_html: embedHtml,
+      directions_url:
+        placeEmbeds.length > 0 ? placeEmbeds[0].directions_url : "", // Keep for backward compatibility
       center_lat: centerLat,
       center_lng: centerLng,
       total_results: places.length,
@@ -299,7 +324,7 @@ app.post("/directions", async (c) => {
       return c.json({ error: "Origin and destination are required" }, 400)
     }
 
-    console.log(`🗺️  Getting directions: ${origin} → ${destination} (${mode})`)
+    console.log(`🗺️ Getting directions: ${origin} → ${destination} (${mode})`)
 
     const routes = await getDirections(origin, destination, mode)
 
@@ -347,35 +372,23 @@ app.post("/llm-function", async (c) => {
     const body = await c.req.json()
     const { function_name: functionName, parameters = {} } = body
 
+    let endpoint
     if (functionName === "search_places") {
-      // Redirect to search places with same auth
-      c.req = {
-        ...c.req,
-        json: async () => parameters,
-      }
-      return await app.fetch(
-        new Request("http://localhost:3000/search-places", {
-          method: "POST",
-          headers: c.req.header(),
-          body: JSON.stringify(parameters),
-        })
-      )
+      endpoint = "/search-places"
     } else if (functionName === "get_directions") {
-      // Redirect to directions with same auth
-      c.req = {
-        ...c.req,
-        json: async () => parameters,
-      }
-      return await app.fetch(
-        new Request("http://localhost:3000/directions", {
-          method: "POST",
-          headers: c.req.header(),
-          body: JSON.stringify(parameters),
-        })
-      )
+      endpoint = "/directions"
     } else {
       return c.json({ error: "Unknown function name" }, 400)
     }
+
+    const internalUrl = `http://localhost:${config.port}${endpoint}`
+    return await app.fetch(
+      new Request(internalUrl, {
+        method: "POST",
+        headers: c.req.header(),
+        body: JSON.stringify(parameters),
+      })
+    )
   } catch (error) {
     console.error("LLM function error:", error)
     return c.json(

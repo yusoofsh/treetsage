@@ -1,6 +1,3 @@
-// test.js - Test script for Bun Maps API
-import { expect } from "bun:test"
-
 // Configuration
 const API_URL = 'http://localhost:3000'
 const API_TOKEN = process.env.API_SECRET || 'your-secure-secret-key-here'

@@ -119,8 +119,7 @@ pip install open-webui
 export OLLAMA_BASE_URL=http://localhost:11434
 open-webui serve --port 8080
 
-# Upload the custom function (openwebui_function.py)
-# Visit http://localhost:8080 and go to Admin Panel > Functions
+# Upload the custom function
 ```
 
 ## 🏗️ Architecture
